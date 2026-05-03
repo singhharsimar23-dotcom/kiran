@@ -1,0 +1,19 @@
+name: Forecast
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:   # manual trigger for demo and testing
+jobs:
+  forecast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'            # cache pip deps — reduces cold start from ~2min to ~25s
+      - run: pip install -r requirements.txt
+      - run: python scripts/fetch_and_forecast.py
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}

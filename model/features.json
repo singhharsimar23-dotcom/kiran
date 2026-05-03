@@ -1,0 +1,23 @@
+[
+  "physics_ceiling_mw",
+  "cloud_cover_norm",
+  "wind_speed_hub",
+  "wind_dir_sin",
+  "wind_dir_cos",
+  "temperature_c",
+  "soiling_factor",
+  "hour_sin",
+  "hour_cos",
+  "month_sin",
+  "month_cos",
+  "is_monsoon",
+  "asset_type_num",
+  "terrain_type_num",
+  "capacity_mw",
+  "lat",
+  "lon",
+  "gen_lag_1h",
+  "gen_lag_24h",
+  "cloud_lag_1h",
+  "has_real_lag"
+]
