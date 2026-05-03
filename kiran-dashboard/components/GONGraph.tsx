@@ -19,26 +19,39 @@ export default function GONGraph({ plants, gonData }: Props) {
     const width = svgRef.current.clientWidth || 700
     const height = 480
 
-    // Build nodes
+    // CHANGE 3 — Include lat/lon in node construction
     const nodes = plants.map((p) => ({
       id: p.name,
       capacity: p.capacity_mw,
       type: p.asset_type,
-      x: width / 2 + Math.random() * 100 - 50,
-      y: height / 2 + Math.random() * 100 - 50,
+      lat: (p as any).lat ?? 15.0,
+      lon: (p as any).lon ?? 76.5,
+      x: 0,
+      y: 0,
       fx: null as number | null,
       fy: null as number | null,
     }))
 
-    // Build links — only edges with r > 0.5
-    const links: { source: any; target: any; lag_h: number; r: number }[] = []
+    // CHANGE 1 — Build two tiers of links
+    const strongLinks: any[] = [] // r > 0.45 — solid directed arrows
+    const weakLinks: any[] = [] // 0.25 < r <= 0.45 — dashed, no arrow
+
     for (const [src, targets] of Object.entries(gonData)) {
-      for (const [tgt, edge] of Object.entries(targets)) {
-        if (edge.r > 0.5) {
-          links.push({ source: src, target: tgt, lag_h: edge.lag_h, r: edge.r })
-        }
+      for (const [tgt, edge] of Object.entries(targets as any)) {
+        // sourcePlant LEADS targetPlant. D3 arrow points to target.
+        // If JSON direction matches flow (Wind -> Solar), use as is.
+        const linkObj = { source: src, target: tgt, lag_h: edge.lag_h, r: edge.r }
+        if (edge.r > 0.45) strongLinks.push(linkObj)
+        else if (edge.r > 0.25) weakLinks.push(linkObj)
       }
     }
+    const allLinks = [...strongLinks, ...weakLinks]
+
+    // DEBUG log temporarily to verify direction
+    console.log(
+      'GON edges:',
+      allLinks.slice(0, 5).map((l: any) => `${l.source}→${l.target} r=${l.r.toFixed(2)}`)
+    )
 
     const svg = d3.select(svgRef.current)
     svg.selectAll('*').remove()
@@ -75,29 +88,82 @@ export default function GONGraph({ plants, gonData }: Props) {
       .force(
         'link',
         d3
-          .forceLink(links)
+          .forceLink(allLinks)
           .id((d: any) => d.id)
           .distance(130)
       )
       .force('charge', d3.forceManyBody().strength(-350))
       .force('center', d3.forceCenter(width / 2, height / 2))
 
+    // CHANGE 2 — Fix isolated nodes with ring layout
+    const connectedIds = new Set([
+      ...allLinks.map((l: any) => (typeof l.source === 'object' ? l.source.id : l.source)),
+      ...allLinks.map((l: any) => (typeof l.target === 'object' ? l.target.id : l.target)),
+    ])
+    const isolatedNodes = nodes.filter((n) => !connectedIds.has(n.id))
+
+    const ringRadius = Math.min(width * 0.42, height * 0.42)
+    isolatedNodes.forEach((n, i) => {
+      const angle = ((i + 0.5) / Math.max(isolatedNodes.length, 1)) * 2 * Math.PI
+      n.fx = width / 2 + Math.cos(angle) * ringRadius
+      n.fy = height / 2 + Math.sin(angle) * ringRadius
+    })
+
+    // Release fixed positions after 2s
+    setTimeout(() => {
+      isolatedNodes.forEach((n: any) => {
+        n.fx = null
+        n.fy = null
+      })
+      sim.alpha(0.1).restart()
+    }, 2000)
+
+    // CHANGE 3 — Geographic position hints
+    // lat range 12.5-18.0, lon range 74.0-78.5
+    const mapLat = (lat: number) => ((18.0 - lat) / (18.0 - 12.5)) * (height * 0.8) + height * 0.1
+    const mapLon = (lon: number) => ((lon - 74.0) / (78.5 - 74.0)) * (width * 0.8) + width * 0.1
+
+    nodes.forEach((n: any) => {
+      if (!n.fx) {
+        n.x = mapLon(n.lon ?? 76.5)
+        n.y = mapLat(n.lat ?? 15.0)
+      }
+    })
+
     // ── EDGES ──────────────────────────────────────────────────────────────
+    const weakLinkLines = g
+      .append('g')
+      .selectAll<SVGLineElement, (typeof weakLinks)[0]>('line')
+      .data(weakLinks)
+      .join('line')
+      .attr('stroke', '#D1D5DB')
+      .attr('stroke-width', 1)
+      .attr('stroke-dasharray', '4 3')
+      .attr('opacity', 0.6)
+
+    weakLinkLines
+      .append('title')
+      .text(
+        (d: any) =>
+          `${d.source.id || d.source}→${d.target.id || d.target}: r=${d.r.toFixed(2)} lag=${d.lag_h}h`
+      )
+
     const linkLines = g
       .append('g')
-      .selectAll<SVGLineElement, (typeof links)[0]>('line')
-      .data(links)
+      .selectAll<SVGLineElement, (typeof strongLinks)[0]>('line')
+      .data(strongLinks)
       .join('line')
       .attr('stroke', '#9CA3AF')
       .attr('stroke-width', (d) => 1 + d.r * 3)
       .attr('opacity', (d) => d.r)
       .attr('marker-end', 'url(#arrow)')
 
-    // Tooltip on each line
-    linkLines.append('title').text(
-      (d: any) =>
-        `${d.source.id || d.source}→${d.target.id || d.target}: lag=${d.lag_h}h r=${d.r.toFixed(2)}`
-    )
+    linkLines
+      .append('title')
+      .text(
+        (d: any) =>
+          `${d.source.id || d.source}→${d.target.id || d.target}: lag=${d.lag_h}h r=${d.r.toFixed(2)}`
+      )
 
     // ── NODES ──────────────────────────────────────────────────────────────
     const node = g
@@ -105,7 +171,7 @@ export default function GONGraph({ plants, gonData }: Props) {
       .selectAll<SVGCircleElement, (typeof nodes)[0]>('circle')
       .data(nodes)
       .join('circle')
-      .attr('r', (d) => 8 + d.capacity / 500)
+      .attr('r', (d: any) => Math.max(7, Math.min(22, 5 + Math.sqrt(d.capacity) / 9)))
       .attr('fill', (d) => (d.type === 'solar' ? '#1D4ED8' : '#D97706'))
       .attr('stroke', 'white')
       .attr('stroke-width', 2)
@@ -145,9 +211,14 @@ export default function GONGraph({ plants, gonData }: Props) {
       .attr('dy', 20)
       .style('pointer-events', 'none')
 
-    // ── TICK — uses linkLines (lines), not title elements ──────────────────
     sim.on('tick', () => {
       linkLines
+        .attr('x1', (d: any) => d.source.x)
+        .attr('y1', (d: any) => d.source.y)
+        .attr('x2', (d: any) => d.target.x)
+        .attr('y2', (d: any) => d.target.y)
+
+      weakLinkLines
         .attr('x1', (d: any) => d.source.x)
         .attr('y1', (d: any) => d.source.y)
         .attr('x2', (d: any) => d.target.x)
@@ -179,6 +250,52 @@ export default function GONGraph({ plants, gonData }: Props) {
         className="w-full border border-gray-200 rounded-lg"
         style={{ height: 480 }}
       />
+      <div
+        style={{
+          padding: '10px 14px',
+          borderTop: '0.5px solid #E5E7EB',
+          fontSize: 12,
+          color: '#6B7280',
+          lineHeight: 1.7,
+          display: 'flex',
+          gap: 24,
+          flexWrap: 'wrap' as const,
+        }}
+      >
+        <span>
+          <span
+            style={{
+              display: 'inline-block',
+              width: 20,
+              height: 2,
+              background: '#9CA3AF',
+              verticalAlign: 'middle',
+              marginRight: 4,
+            }}
+          />
+          Strong correlation (r &gt; 0.45) — solid arrow
+        </span>
+        <span>
+          <span
+            style={{
+              display: 'inline-block',
+              width: 20,
+              height: 2,
+              background: '#D1D5DB',
+              verticalAlign: 'middle',
+              marginRight: 4,
+              borderTop: '2px dashed #D1D5DB',
+            }}
+          />
+          Weak correlation (r &gt; 0.25) — dashed
+        </span>
+        <span>Arrow direction = upstream leads downstream in time</span>
+        <span>Node size = plant capacity</span>
+        <span style={{ color: '#374151', fontWeight: 500 }}>
+          Gadag (wind) → Chitradurga (solar): 2.5h lag — plateau wind clearing propagates southeast,
+          solar recovery follows
+        </span>
+      </div>
       {selectedNode && (
         <p className="mt-2 text-sm text-gray-500">
           Selected: <strong>{selectedNode}</strong> — hover edges to see lag and correlation values

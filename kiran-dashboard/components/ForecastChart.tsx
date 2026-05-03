@@ -69,7 +69,7 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
 
     const peakP50 = Math.max(...forecasts.map((f) => f.p50_mw ?? 0))
     const peakReserve = Math.max(...forecasts.map((f) => f.reserve_mw ?? 0))
-    
+
     // Find risk level at peak P50
     const peakIndex = forecasts.findIndex(f => (f.p50_mw ?? 0) === peakP50)
     const riskLevel = forecasts[peakIndex]?.risk_level ?? 'LOW'
@@ -92,18 +92,12 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
     }
   }
 
-  const CustomTooltip = ({ active, payload }: { active?: boolean; payload?: { payload: Forecast }[] }) => {
+  const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: { payload: Forecast }[]; label?: string }) => {
     if (active && payload && payload.length) {
       const data = payload[0].payload as Forecast
       return (
         <div className="bg-white p-3 border rounded shadow-lg text-sm">
-          <p className="font-bold mb-1">
-            {new Date(data.forecast_for).toLocaleTimeString('en-IN', {
-              hour: '2-digit',
-              minute: '2-digit',
-              timeZone: 'Asia/Kolkata',
-            })}
-          </p>
+          <p className="font-bold mb-1">{label}</p>
           <p className="text-blue-700">P50: <span className="font-semibold">{(data.p50_mw ?? 0).toFixed(0)} MW</span></p>
           <div className="flex gap-4 text-gray-600 border-t mt-1 pt-1">
             <p>P10: {(data.p10_mw ?? 0).toFixed(0)}</p>
@@ -139,13 +133,16 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
             <XAxis
               dataKey="forecast_for"
-              tickFormatter={(v) =>
-                new Date(v).toLocaleTimeString('en-IN', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  timeZone: 'Asia/Kolkata',
-                })
-              }
+              tickFormatter={(value: string) => {
+                try {
+                  return new Date(value).toLocaleTimeString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                  })
+                } catch { return value }
+              }}
               stroke="#94a3b8"
               fontSize={12}
               tickMargin={10}
@@ -156,8 +153,21 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
               fontSize={12}
               tickMargin={10}
             />
-            <Tooltip content={<CustomTooltip />} />
-            
+            <Tooltip
+              content={<CustomTooltip />}
+              labelFormatter={(label: string) => {
+                try {
+                  return new Date(label).toLocaleString('en-IN', {
+                    timeZone: 'Asia/Kolkata',
+                    weekday: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true
+                  }) + ' IST'
+                } catch { return label }
+              }}
+            />
+
             {/* P10/P90 Band */}
             <Area
               dataKey="p10_mw"
@@ -173,7 +183,7 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
               stroke="none"
               animationDuration={500}
             />
-            
+
             {/* P50 Line */}
             <Line
               type="monotone"
@@ -183,7 +193,7 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
               dot={false}
               animationDuration={800}
             />
-            
+
             <ReferenceLine
               x={new Date().toISOString()}
               stroke="#9CA3AF"

@@ -9,6 +9,7 @@ from sklearn.metrics import mean_absolute_error
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from supabase import create_client
+import pickle
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FEATURE LIST — 21 features. Single source of truth. Never change order.
@@ -272,42 +273,57 @@ print("  [OK] All metric assertions passed.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PART F — SHAP (with base_score patch applied to all three model files)
+# PART F — SHAP PERSISTENCE (Fixes XGBoost 2.0 base_score parsing error)
 # ──────────────────────────────────────────────────────────────────────────────
-print('PART F — SHAP SANITY CHECK...')
+print('PART F — SHAP PERSISTENCE...')
 
-# Patch all three model files in-place so Session 6 inference also works
+# MONKEYPATCH SHAP for XGBoost 2.0+ JSON compatibility
+import shap.explainers._tree as shap_tree
+original_float = float
+def patched_float(x):
+    if isinstance(x, str) and x.startswith('[') and x.endswith(']'):
+        return original_float(x[1:-1])
+    return original_float(x)
+shap_tree.float = patched_float
+
+# 1. Save background sample for model-agnostic explanation
+background = X_train.sample(100, random_state=42)[FEATURE_LIST]
+background.to_parquet('model/shap_background.parquet', index=False)
+print("  shap_background.parquet saved (100 rows).")
+
+# 2. Patch model files in-place (keeps files compatible for other tools)
 for tag in ['p10', 'p50', 'p90']:
-    patch_and_reload(f'model/xgb_{tag}.json')  # patches file, returns booster
-print("  base_score patch applied to all three model files.")
+    patch_and_reload(f'model/xgb_{tag}.json')
+print("  base_score patch applied to all model files.")
 
+# 3. Create and pickle the robust Explainer
+# We use shap.Explainer (model-agnostic) to bypass TreeExplainer's JSON parser
+explainer = shap.Explainer(models[0.5], background)
+with open('model/shap_explainer.pkl', 'wb') as f:
+    pickle.dump(explainer, f)
+print("  shap_explainer.pkl saved.")
+
+# 4. Verification check
+print("  Verifying SHAP output...")
 try:
-    # Use robust Explainer with masker to avoid version-specific parsing crashes
-    explainer = shap.Explainer(models[0.5], masker=shap.maskers.Independent(X_train.iloc[:100]))
+    X_shap = X_test.iloc[:50][FEATURE_LIST]
+    shap_vals = explainer(X_shap)
+    # mean_abs of values across rows
+    mean_abs = pd.Series(np.abs(shap_vals.values).mean(axis=0), index=FEATURE_LIST)
     
-    # Use 100 test rows for stability
-    X_shap = X_test.iloc[:100].apply(pd.to_numeric, errors='coerce').fillna(0)
-    sv = explainer(X_shap)
-    
-    # SHAP values for regressors are often in sv.values
-    vals = sv.values if hasattr(sv, 'values') else sv
-    mean_abs = pd.Series(np.abs(vals).mean(axis=0), index=FEATURE_LIST)
     top5 = mean_abs.sort_values(ascending=False).head(5)
     print("  SHAP top 5 features:")
     for feat, val in top5.items():
         print(f"    {feat:<22} {val:.6f}")
-    
-    shap_rank1 = top5.index[0]
-    if shap_rank1 != 'physics_ceiling_mw':
-        print(f"  [WARNING] SHAP rank 1 is '{shap_rank1}', not 'physics_ceiling_mw'.")
-    else:
-        print("  [OK] physics_ceiling_mw is SHAP rank 1.")
+
+    # Critical assertion: physics_ceiling_mw must dominate
+    rank1 = mean_abs.idxmax()
+    assert rank1 == 'physics_ceiling_mw', f"FAIL: {rank1} dominates, expected physics_ceiling_mw"
+    print("  [OK] SHAP verification passed.")
 
 except Exception as e:
-    # Should not reach here after patch — log and continue
-    print(f"  SHAP failed after patch ({e}). Falling back to gain importance:")
-    imp = pd.Series(models[0.5].feature_importances_, index=FEATURE_LIST)
-    print(imp.sort_values(ascending=False).head(5).to_string())
+    print(f"  [ERROR] SHAP verification failed: {e}")
+    # Don't exit; metrics might still be valid
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -351,6 +367,34 @@ supabase.table('model_health').insert({
 }).execute()
 
 print('model_health written to Supabase.')
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PART I — SAVING SHAP BACKGROUND
+# ──────────────────────────────────────────────────────────────────────────────
+print('PART I — SAVING SHAP BACKGROUND...')
+# Save 100-row background sample for stable SHAP at inference time
+background = X_train.sample(100, random_state=42)[FEATURE_LIST].copy()
+background = background.apply(pd.to_numeric, errors='coerce').fillna(0)
+background.to_parquet('model/shap_background.parquet', index=False)
+
+# Verify SHAP works with background explainer
+try:
+    ex_verify = shap.Explainer(models[0.5], background)
+    sv_check  = ex_verify(X_test.iloc[:20])
+    mean_abs  = pd.Series(np.abs(sv_check.values).mean(axis=0), index=FEATURE_LIST)
+    top5      = mean_abs.sort_values(ascending=False).head(5)
+    print("SHAP (background explainer) top 5:")
+    print(top5.to_string())
+    print(f"SHAP rank 1: {top5.index[0]}")
+    # Save explainer object for reuse at inference
+    import pickle
+    with open('model/shap_explainer.pkl', 'wb') as f:
+        pickle.dump(ex_verify, f)
+    print("shap_explainer.pkl saved")
+except Exception as e:
+    print(f"SHAP background explainer failed: {e}")
+    print("Continuing without saving explainer")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # FINAL SUMMARY

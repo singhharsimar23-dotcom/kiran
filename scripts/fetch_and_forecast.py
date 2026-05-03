@@ -3,6 +3,9 @@ import sys
 import time
 from datetime import datetime, timezone, timedelta
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # STEP -1: EARLY DIAGNOSTICS
 print(f"[{datetime.now(timezone.utc).isoformat()}] CRON START: fetch_and_forecast.py initiated.")
 
@@ -22,6 +25,7 @@ import numpy as np
 import pandas as pd
 import json
 import requests
+import pickle
 
 print("Loading specialized libraries (pvlib, xgboost, shap, bs4)...")
 try:
@@ -32,13 +36,11 @@ try:
     from zoneinfo import ZoneInfo
     from bs4 import BeautifulSoup
     from supabase import create_client
-    from dotenv import load_dotenv
 except ImportError as e:
     print(f"CRITICAL ERROR: Dependency failure: {e}")
     sys.exit(1)
 
 print("All dependencies loaded. Initializing...")
-load_dotenv()
 
 # Initialize Supabase client
 supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -69,6 +71,24 @@ model_p10 = XGBRegressor(); model_p10.load_model('model/xgb_p10.json')
 model_p50 = XGBRegressor(); model_p50.load_model('model/xgb_p50.json')
 model_p90 = XGBRegressor(); model_p90.load_model('model/xgb_p90.json')
 
+# Load SHAP explainer (background-based, avoids XGBoost 2.0 base_score bug)
+import pickle as _pickle
+_shap_pkl = 'model/shap_explainer.pkl'
+if os.path.exists(_shap_pkl):
+    with open(_shap_pkl, 'rb') as _f:
+        shap_explainer = _pickle.load(_f)
+    print("SHAP explainer loaded from pkl")
+else:
+    # Fallback: build from background parquet if pkl missing
+    try:
+        _bg = pd.read_parquet('model/shap_background.parquet')
+        _bg = _bg.apply(pd.to_numeric, errors='coerce').fillna(0)
+        shap_explainer = shap.Explainer(model_p50, _bg)
+        print("SHAP explainer built from background parquet")
+    except Exception as _e:
+        shap_explainer = None
+        print(f"SHAP explainer unavailable: {_e}")
+
 # STEP 2 — FETCH 24HR FORECAST WEATHER (all plants, batched)
 print("Fetching weather forecasts...")
 all_weather = {}   # {plant_id: DataFrame of 24 hourly rows}
@@ -77,7 +97,7 @@ for plant in plants:
     params = {
         'latitude': plant['lat'], 
         'longitude': plant['lon'],
-        'hourly': 'shortwave_radiation,cloud_cover,wind_speed_10m,wind_direction_10m,temperature_2m,precipitation',
+        'hourly': 'shortwave_radiation,cloud_cover,wind_speed_10m,wind_speed_80m,wind_direction_10m,temperature_2m,precipitation',
         'forecast_days': 2, 
         'timezone': 'Asia/Kolkata'
     }
@@ -98,10 +118,11 @@ for plant in plants:
         'ghi_wm2':            np.clip(h['shortwave_radiation'], 0, 1400),
         'cloud_cover_pct':    np.clip(h['cloud_cover'], 0, 100),
         'wind_speed_10m':     np.clip(h['wind_speed_10m'], 0, 80),
+        'wind_speed_80m':     np.clip(h.get('wind_speed_80m', h['wind_speed_10m']), 0, 100),
         'wind_direction_deg': np.clip(h['wind_direction_10m'], 0, 360),
         'temperature_c':      np.clip(h['temperature_2m'], -10, 60),
         'precipitation_mm':   np.clip(h['precipitation'], 0, 500)
-    }).iloc[:24].ffill().dropna()
+    }).iloc[:25].ffill().dropna()
     df_w['plant_id'] = plant['id']
     all_weather[plant['id']] = df_w
 
@@ -117,7 +138,17 @@ for pid, df_w in all_weather.items():
         ceil[cs['ghi'].values < 10] = 0.0
     else:  # wind
         hub_h = p['hub_height_m'] if p['hub_height_m'] else 80.0
-        v = df_w['wind_speed_10m'].values * (hub_h/10.0)**0.15
+        # Prefer 80m wind speed if available
+        ws_key = 'wind_speed_80m' if 'wind_speed_80m' in df_w.columns else 'wind_speed_10m'
+        wind_speed = df_w[ws_key].values
+        
+        if hub_h == 80.0 and ws_key == 'wind_speed_80m':
+            v = wind_speed # direct measurement
+        elif ws_key == 'wind_speed_80m':
+            v = wind_speed * (hub_h/80.0)**0.15 # extrapolate from 80m
+        else:
+            v = wind_speed * (hub_h/10.0)**0.15 # extrapolate from 10m
+            
         ceil = np.zeros(len(df_w))
         v_mask = (v >= 3.5) & (v < 12.0)
         ceil[v_mask] = p['capacity_mw'] * (v[v_mask] / 12.0)**3
@@ -178,16 +209,6 @@ for pid in all_weather:
 print("Generating predictions and SHAP drivers...")
 all_forecasts = {}
 
-# MONKEYPATCH SHAP for XGBoost 2.0+ JSON compatibility
-import shap.explainers._tree as shap_tree
-original_float = float
-def patched_float(x):
-    if isinstance(x, str) and x.startswith('[') and x.endswith(']'):
-        return original_float(x[1:-1])
-    return original_float(x)
-shap_tree.float = patched_float
-
-explainer = shap.TreeExplainer(model_p50)
 
 for pid, df_w in all_weather.items():
     p = plant_map[pid]
@@ -232,22 +253,41 @@ for pid, df_w in all_weather.items():
     p90_att = np.maximum(p90_att, p50_att)
     p10_att = np.maximum(p10_att, 0.0)
     
+    # Hard physics cap — attenuation cannot exceed 1.0 (100% of ceiling)
+    # p90 allowed slight 2% over-performance margin for uncertainty band
+    p50_att = np.clip(p50_att, 0.0, 1.00)
+    p10_att = np.clip(p10_att, 0.0, p50_att)
+    p90_att = np.clip(p90_att, p50_att, 1.02)
+    
     ceil = df_w['physics_ceiling_mw'].values
     df_w['p10_mw'] = p10_att * ceil
     df_w['p50_mw'] = p50_att * ceil
     df_w['p90_mw'] = p90_att * ceil
 
-    # SHAP — compute at peak hour, convert to MW, store on ALL rows
+    # Enforce minimum uncertainty band for wind plants (Step 4)
+    if p['asset_type'] == 'wind':
+        min_band = df_w['p50_mw'] * 0.20
+        df_w['p10_mw'] = np.minimum(df_w['p10_mw'], df_w['p50_mw'] - min_band)
+        df_w['p90_mw'] = np.maximum(df_w['p90_mw'], df_w['p50_mw'] + min_band)
+
     idx_peak = int(np.argmax(df_w['p50_mw'].values))
-    row_peak = X.iloc[[idx_peak]]
-    sv = explainer.shap_values(row_peak)
-    ceil_peak = float(ceil[idx_peak])
-    
-    # sv[0] for the first (and only) row
-    shap_mw = {f: round(float(v) * ceil_peak, 1) for f, v in zip(FEATURE_LIST, sv[0])}
-    top3 = dict(sorted(shap_mw.items(), key=lambda x: abs(x[1]), reverse=True)[:3])
-    shap_json = json.dumps(top3)
-    df_w['shap_drivers'] = shap_json
+    # SHAP — use background explainer to avoid XGBoost 2.0 base_score crash
+    shap_json = '{}'
+    if shap_explainer is not None:
+        try:
+            X_peak_clean = X.iloc[[idx_peak]].apply(pd.to_numeric, errors='coerce').fillna(0)
+            sv           = shap_explainer(X_peak_clean).values[0]  # shape (21,)
+            ceil_peak    = float(ceil[idx_peak])
+            shap_mw      = {
+                feat: round(float(v) * ceil_peak, 1)
+                for feat, v in zip(FEATURE_LIST, sv)
+            }
+            top3     = dict(sorted(shap_mw.items(), key=lambda x: abs(x[1]), reverse=True)[:3])
+            shap_json = json.dumps(top3)
+        except Exception as _shap_err:
+            print(f"SHAP failed for {plant_map[pid]['name']}: {_shap_err}")
+            shap_json = '{}'
+    df_w['shap_drivers'] = shap_json  # stored on ALL rows for this plant
 
     # Risk and Reserve
     df_w['reserve_mw'] = np.ceil((df_w['p50_mw'] - df_w['p10_mw']) / 10) * 10
@@ -294,7 +334,7 @@ for pid, df_f in all_forecasts.items():
                 factor = 1 + 0.3 * deviation * edge['r']
                 df_f['p50_mw'] = df_f['p50_mw'] * np.clip(factor, 0.7, 1.3)
                 gon_fired = True
-                print(f"GON: {source_name}→{pname} factor={factor:.3f}")
+                print(f"GON: {source_name}->{pname} factor={factor:.3f}")
     
     all_forecasts[pid]['gon_adjusted'] = gon_fired
 
@@ -372,6 +412,15 @@ except Exception as e:
     print(f"KPTCL Error: {e}")
     try:
         supabase.table('kptcl_readings').insert({'scraped_at': datetime.now(timezone.utc).isoformat(), 'scrape_success': False, 'error_msg': str(e)}).execute()
+        # Log to model_health for dashboard visibility
+        supabase.table('model_health').insert({
+            'checked_at': datetime.now(timezone.utc).isoformat(),
+            'mae_p50': None,
+            'persistence_mae': None,
+            'coverage_pct': None,
+            'needs_retraining': False,
+            'per_plant_metrics': {'scrape_status': 'failed', 'reason': str(e)}
+        }).execute()
     except: pass
 
 if kptcl_signal:
@@ -464,7 +513,7 @@ for pid, df_f in all_forecasts.items():
 for i in range(0, len(forecast_rows), 100):
     supabase.table('forecasts').upsert(
         forecast_rows[i:i+100],
-        on_conflict='plant_id,forecast_for,is_demo'
+        on_conflict='plant_id,forecast_for,is_demo,demo_scenario'
     ).execute()
 
 # Upsert ramp alerts

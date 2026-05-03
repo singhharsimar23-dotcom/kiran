@@ -211,11 +211,10 @@ export default function ReserveDashboard({ plants, forecasts, heroPlantId, rampA
               <button
                 key={plant.id}
                 onClick={() => setSelectedPlantId(plant.id)}
-                className={`w-full text-left p-4 rounded-xl border transition-all duration-200 ${
-                  isSelected
+                className={`w-full text-left p-4 rounded-xl border transition-all duration-200 ${isSelected
                     ? 'bg-blue-50 border-blue-500 shadow-sm ring-1 ring-blue-500'
                     : 'bg-white border-gray-100 hover:border-gray-300 shadow-sm'
-                }`}
+                  }`}
               >
                 <div className="flex justify-between items-start mb-2">
                   <span className="font-bold text-gray-900 truncate pr-2">{plant.name}</span>

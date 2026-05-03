@@ -18,25 +18,38 @@ export async function getForecasts(
   isDemo: boolean,
   scenario?: string
 ): Promise<Forecast[]> {
-  let q = supabase
+  // Demo mode
+  if (isDemo) {
+    const { data } = await supabase
+      .from('forecasts')
+      .select('*')
+      .eq('plant_id', plantId)
+      .eq('is_demo', true)
+      .eq('demo_scenario', scenario ?? 'A')
+      .order('forecast_for', { ascending: true })
+      .limit(24)
+    return data ?? []
+  }
+
+  // Live mode: get the 25 most recent forecast rows for this plant
+  // ordered by forecast_for ascending — simple, never returns 0 rows
+  // if any data exists at all for this plant
+  const { data } = await supabase
     .from('forecasts')
     .select('*')
     .eq('plant_id', plantId)
-    .eq('is_demo', isDemo)
-    .order('forecast_for', { ascending: true })
-    .limit(30)
+    .eq('is_demo', false)
+    .order('created_at', { ascending: false })
+    .limit(25)
 
-  if (isDemo && scenario) {
-    q = q.eq('demo_scenario', scenario)
-  }
+  if (!data || data.length === 0) return []
 
-  const { data, error } = await q
-  if (error) {
-    console.error('getForecasts:', error)
-    return []
-  }
-  return data || []
+  // Sort by forecast_for ascending for chart rendering
+  return [...data].sort(
+    (a, b) => new Date(a.forecast_for).getTime() - new Date(b.forecast_for).getTime()
+  )
 }
+
 
 export async function getLatestForecast(plantId: string): Promise<Forecast | null> {
   // Return the max p50 row in the next 24 hours — peak operational forecast
