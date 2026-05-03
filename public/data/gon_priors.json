@@ -1,0 +1,134 @@
+{
+  "Bellary": {
+    "Bidar": {
+      "lag_h": 0,
+      "r": 0.801
+    },
+    "Chitradurga": {
+      "lag_h": 0,
+      "r": 0.828
+    },
+    "Pavagada": {
+      "lag_h": 0,
+      "r": 0.833
+    },
+    "Raichur": {
+      "lag_h": 0,
+      "r": 0.838
+    },
+    "Tumkur": {
+      "lag_h": 0,
+      "r": 0.792
+    }
+  },
+  "Bidar": {
+    "Bellary": {
+      "lag_h": 0,
+      "r": 0.801
+    },
+    "Chitradurga": {
+      "lag_h": 0,
+      "r": 0.78
+    },
+    "Pavagada": {
+      "lag_h": 0,
+      "r": 0.793
+    },
+    "Raichur": {
+      "lag_h": 0,
+      "r": 0.829
+    },
+    "Tumkur": {
+      "lag_h": 0,
+      "r": 0.767
+    }
+  },
+  "Chitradurga": {
+    "Bellary": {
+      "lag_h": 0,
+      "r": 0.828
+    },
+    "Bidar": {
+      "lag_h": 0,
+      "r": 0.78
+    },
+    "Pavagada": {
+      "lag_h": 0,
+      "r": 0.827
+    },
+    "Raichur": {
+      "lag_h": 0,
+      "r": 0.804
+    },
+    "Tumkur": {
+      "lag_h": 0,
+      "r": 0.805
+    }
+  },
+  "Pavagada": {
+    "Bellary": {
+      "lag_h": 0,
+      "r": 0.833
+    },
+    "Bidar": {
+      "lag_h": 0,
+      "r": 0.793
+    },
+    "Chitradurga": {
+      "lag_h": 0,
+      "r": 0.827
+    },
+    "Raichur": {
+      "lag_h": 0,
+      "r": 0.809
+    },
+    "Tumkur": {
+      "lag_h": 0,
+      "r": 0.833
+    }
+  },
+  "Raichur": {
+    "Bellary": {
+      "lag_h": 0,
+      "r": 0.838
+    },
+    "Bidar": {
+      "lag_h": 0,
+      "r": 0.829
+    },
+    "Chitradurga": {
+      "lag_h": 0,
+      "r": 0.804
+    },
+    "Pavagada": {
+      "lag_h": 0,
+      "r": 0.809
+    },
+    "Tumkur": {
+      "lag_h": 0,
+      "r": 0.777
+    }
+  },
+  "Tumkur": {
+    "Bellary": {
+      "lag_h": 0,
+      "r": 0.792
+    },
+    "Bidar": {
+      "lag_h": 0,
+      "r": 0.767
+    },
+    "Chitradurga": {
+      "lag_h": 0,
+      "r": 0.805
+    },
+    "Pavagada": {
+      "lag_h": 0,
+      "r": 0.833
+    },
+    "Raichur": {
+      "lag_h": 0,
+      "r": 0.777
+    }
+  }
+}
