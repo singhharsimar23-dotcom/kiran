@@ -1,14 +1,47 @@
-import os, json, sys, time, numpy as np, pandas as pd, pvlib, shap, requests
-from xgboost import XGBRegressor
+import os
+import sys
+import time
 from datetime import datetime, timezone, timedelta
-from supabase import create_client
-from dotenv import load_dotenv
 
-# Load environment variables
+# STEP -1: EARLY DIAGNOSTICS
+print(f"[{datetime.now(timezone.utc).isoformat()}] CRON START: fetch_and_forecast.py initiated.")
+
+# Validate environment variables early
+SUPABASE_URL = os.environ.get('SUPABASE_URL')
+SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY')
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    print(f"[{datetime.now(timezone.utc).isoformat()}] CRITICAL ERROR: SUPABASE_URL or SUPABASE_SERVICE_KEY missing from environment.")
+    sys.exit(1)
+
+print(f"[{datetime.now(timezone.utc).isoformat()}] Environment validated. Loading dependencies...")
+
+# Sequential imports with logging to identify hangs/OOM
+print("Loading data libraries (numpy, pandas)...")
+import numpy as np
+import pandas as pd
+import json
+import requests
+
+print("Loading specialized libraries (pvlib, xgboost, shap, bs4)...")
+try:
+    import pvlib
+    import shap
+    import shap.explainers._tree as shap_tree
+    from xgboost import XGBRegressor
+    from zoneinfo import ZoneInfo
+    from bs4 import BeautifulSoup
+    from supabase import create_client
+    from dotenv import load_dotenv
+except ImportError as e:
+    print(f"CRITICAL ERROR: Dependency failure: {e}")
+    sys.exit(1)
+
+print("All dependencies loaded. Initializing...")
 load_dotenv()
 
 # Initialize Supabase client
-supabase = create_client(os.environ['SUPABASE_URL'], os.environ['SUPABASE_SERVICE_KEY'])
+supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 start_time = time.time()
 
 # STEP 0 — STALENESS GUARD (handles first run with empty table)
@@ -265,6 +298,112 @@ for pid, df_f in all_forecasts.items():
     
     all_forecasts[pid]['gon_adjusted'] = gon_fired
 
+# STEP 7.5 — KPTCL LIVE CALIBRATION
+print("Performing KPTCL live calibration...")
+def scrape_kptcl():
+    url = "https://kptclsldc.in/StateNCEP.aspx"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    r = requests.get(url, headers=headers, timeout=15)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, 'html.parser')
+    
+    table = None
+    for t in soup.find_all('table'):
+        cells = [c.get_text(strip=True).upper() for c in t.find_all(['td', 'th'])[:10]]
+        if 'WIND' in cells and 'SOLAR' in cells:
+            table = t
+            break
+    
+    if not table:
+        raise ValueError("KPTCL data table not found")
+        
+    headers_row = [c.get_text(strip=True).upper() for c in table.find_all(['td', 'th'])]
+    try:
+        wind_idx = headers_row.index('WIND')
+        solar_idx = headers_row.index('SOLAR')
+    except ValueError:
+        raise ValueError("WIND or SOLAR column not found in KPTCL table")
+        
+    data = {'solar_mw': 0.0, 'wind_mw': 0.0, 'pavagada_mw': 0.0}
+    for row in table.find_all('tr'):
+        cells = row.find_all(['td', 'th'])
+        if not cells: continue
+        label = cells[0].get_text(strip=True).upper()
+        if 'PAVAGADA' in label:
+            try: data['pavagada_mw'] = round(float(cells[solar_idx].get_text(strip=True)), 1)
+            except: pass
+        if 'TOTAL' in label and 'IPPS' in label:
+            try:
+                data['wind_mw'] = round(float(cells[wind_idx].get_text(strip=True)), 1)
+                data['solar_mw'] = round(float(cells[solar_idx].get_text(strip=True)), 1)
+            except: pass
+    return data
+
+kptcl_signal = None
+try:
+    SOLAR_PENETRATION = 0.488
+    WIND_PENETRATION  = 0.400
+    kptcl_data = scrape_kptcl()
+    ist_now = datetime.now(timezone.utc).astimezone(ZoneInfo('Asia/Kolkata'))
+    current_hour = ist_now.hour
+    
+    f_solar_p50 = 0.0
+    f_wind_p50 = 0.0
+    for pid, df_f in all_forecasts.items():
+        match = df_f[df_f['timestamp'].dt.hour == current_hour]
+        if not match.empty:
+            p50_val = float(match['p50_mw'].iloc[0])
+            if plant_map[pid]['asset_type'] == 'solar': f_solar_p50 += p50_val
+            else: f_wind_p50 += p50_val
+                
+    if f_solar_p50 > 200:
+        expected_solar = f_solar_p50 / SOLAR_PENETRATION
+        cal_solar = float(np.clip(kptcl_data['solar_mw'] / max(expected_solar, 1.0), 0.60, 1.40))
+    else: cal_solar = 1.0
+        
+    if f_wind_p50 > 50:
+        expected_wind = f_wind_p50 / WIND_PENETRATION
+        cal_wind = float(np.clip(kptcl_data['wind_mw'] / max(expected_wind, 1.0), 0.60, 1.40))
+    else: cal_wind = 1.0
+        
+    kptcl_signal = {**kptcl_data, 'cal_solar': cal_solar, 'cal_wind': cal_wind}
+    print(f"KPTCL solar={kptcl_data['solar_mw']} wind={kptcl_data['wind_mw']} pavagada={kptcl_data['pavagada_mw']} | cal_solar={cal_solar:.3f} cal_wind={cal_wind:.3f}")
+except Exception as e:
+    print(f"KPTCL Error: {e}")
+    try:
+        supabase.table('kptcl_readings').insert({'scraped_at': datetime.now(timezone.utc).isoformat(), 'scrape_success': False, 'error_msg': str(e)}).execute()
+    except: pass
+
+if kptcl_signal:
+    DECAY = {0: 1.0, 1: 0.6, 2: 0.3}
+    applied_any = False
+    for pid, df_f in all_forecasts.items():
+        cal_base = kptcl_signal['cal_solar'] if plant_map[pid]['asset_type'] == 'solar' else kptcl_signal['cal_wind']
+        if abs(cal_base - 1.0) < 0.05:
+            df_f['kptcl_calibrated'] = False
+            continue
+        applied_any = True
+        for offset, weight in DECAY.items():
+            target_hour = (current_hour + offset) % 24
+            mask = df_f['timestamp'].dt.hour == target_hour
+            if not mask.any(): continue
+            factor = 1.0 + (cal_base - 1.0) * weight
+            for col in ['p10_mw', 'p50_mw', 'p90_mw']:
+                df_f.loc[mask, col] = np.clip(df_f.loc[mask, col] * factor, 0, None)
+            df_f.loc[mask, 'p10_mw'] = np.minimum(df_f.loc[mask, 'p10_mw'], df_f.loc[mask, 'p50_mw'])
+            df_f.loc[mask, 'p90_mw'] = np.maximum(df_f.loc[mask, 'p90_mw'], df_f.loc[mask, 'p50_mw'])
+            df_f.loc[mask, 'reserve_mw'] = np.ceil((df_f.loc[mask, 'p50_mw'] - df_f.loc[mask, 'p10_mw']) / 10) * 10
+        df_f['kptcl_calibrated'] = True
+
+    try:
+        supabase.table('kptcl_readings').insert({
+            'scraped_at': datetime.now(timezone.utc).isoformat(), 'solar_mw': kptcl_signal['solar_mw'],
+            'wind_mw': kptcl_signal['wind_mw'], 'pavagada_mw': kptcl_signal['pavagada_mw'],
+            'calibration_factor_solar': kptcl_signal['cal_solar'], 'calibration_factor_wind': kptcl_signal['cal_wind'],
+            'applied': applied_any, 'scrape_success': True
+        }).execute()
+    except: pass
+
 # STEP 8 — RAMP ALERTS (next 3 hours only, exclude physics-driven transitions)
 print("Checking for ramp alerts...")
 ramp_rows = []
@@ -316,6 +455,7 @@ for pid, df_f in all_forecasts.items():
             'risk_level': str(row['risk_level']),
             'shap_drivers': json.loads(sd) if isinstance(sd, str) else sd,
             'gon_adjusted': bool(row.get('gon_adjusted', False)),
+            'kptcl_calibrated': bool(row.get('kptcl_calibrated', False)),
             'is_demo': False,
             'demo_scenario': None
         })
@@ -339,6 +479,7 @@ print("Pruning old data...")
 prune_cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 supabase.table('forecasts').delete().lt('forecast_for', prune_cutoff).eq('is_demo', False).execute()
 supabase.table('ramp_alerts').delete().lt('expires_at', prune_cutoff).execute()
+supabase.table('kptcl_readings').delete().lt('scraped_at', (datetime.now(timezone.utc)-timedelta(days=30)).isoformat()).execute()
 
 elapsed = time.time() - start_time
 print(f"Done: {len(forecast_rows)} rows, {len(ramp_rows)} ramp alerts. {elapsed:.1f}s. Pruned >7d.")

@@ -92,7 +92,7 @@ def seed_demo():
                             "triggered_at": hour.isoformat(),
                             "direction": "up",
                             "ramp_mw": 108,
-                            "expires_at": (hour + timedelta(hours=2)).isoformat()
+                            "expires_at": (hour + timedelta(minutes=90)).isoformat()
                         })
 
                 elif scenario == 'C':
@@ -123,7 +123,7 @@ def seed_demo():
                                 "triggered_at": hour.isoformat(),
                                 "direction": "down",
                                 "ramp_mw": 190,
-                                "expires_at": (hour + timedelta(hours=2)).isoformat()
+                                "expires_at": (hour + timedelta(minutes=90)).isoformat()
                             })
                         elif name == 'Raichur':
                             ramp_alerts.append({
@@ -131,7 +131,7 @@ def seed_demo():
                                 "triggered_at": hour.isoformat(),
                                 "direction": "down",
                                 "ramp_mw": 110,
-                                "expires_at": (hour + timedelta(hours=2)).isoformat()
+                                "expires_at": (hour + timedelta(minutes=90)).isoformat()
                             })
 
                 forecast_rows.append({

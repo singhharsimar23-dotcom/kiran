@@ -1,9 +1,13 @@
-import { getModelHealth } from '@/lib/queries'
+import { getModelHealth, getKptclHistory } from '@/lib/queries'
+import KptclCalibrationChart from '@/components/KptclCalibrationChart'
 
 export const revalidate = 3600
 
 export default async function VerifyPage() {
-  const health = await getModelHealth()
+  const [health, kptclHistory] = await Promise.all([
+    getModelHealth(),
+    getKptclHistory()
+  ])
 
   if (!health) {
     return (
@@ -100,6 +104,12 @@ export default async function VerifyPage() {
             Evaluated on held-out Jul–Dec 2023 data including full monsoon season.
           </div>
         </div>
+      </div>
+
+      {/* KPTCL Live Calibration Section */}
+      <div className="p-6 bg-white border border-slate-200 rounded-xl shadow-sm">
+        <h3 className="font-semibold text-slate-900 mb-4">KPTCL live calibration — last 6 hours</h3>
+        <KptclCalibrationChart data={kptclHistory} />
       </div>
 
       {/* Per-plant Metrics Table */}

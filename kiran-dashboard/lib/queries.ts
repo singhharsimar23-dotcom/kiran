@@ -156,3 +156,24 @@ export async function getModelHealth(): Promise<ModelHealth | null> {
   }
   return data?.[0] ?? null
 }
+
+export async function getKptclStatus() {
+  const { data } = await supabase
+    .from('kptcl_readings')
+    .select('scraped_at, solar_mw, wind_mw, pavagada_mw, '
+          + 'calibration_factor_solar, calibration_factor_wind, '
+          + 'applied, scrape_success')
+    .order('scraped_at', { ascending: false })
+    .limit(1)
+  return data?.[0] ?? null
+}
+
+export async function getKptclHistory() {
+  const cutoff = new Date(Date.now() - 6*60*60*1000).toISOString()
+  const { data } = await supabase
+    .from('kptcl_readings')
+    .select('scraped_at, solar_mw, wind_mw, calibration_factor_solar, applied, scrape_success')
+    .gte('scraped_at', cutoff)
+    .order('scraped_at', { ascending: true })
+  return data ?? []
+}
