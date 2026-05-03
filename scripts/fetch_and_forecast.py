@@ -265,22 +265,39 @@ for pid, df_f in all_forecasts.items():
     
     all_forecasts[pid]['gon_adjusted'] = gon_fired
 
-# STEP 8 — RAMP ALERTS
+# STEP 8 — RAMP ALERTS (next 3 hours only, exclude physics-driven transitions)
 print("Checking for ramp alerts...")
 ramp_rows = []
 for pid, df_f in all_forecasts.items():
-    cap = plant_map[pid]['capacity_mw']
-    p50 = df_f['p50_mw'].values
+    cap  = plant_map[pid]['capacity_mw']
+    p50  = df_f['p50_mw'].values
+    ceil = df_f['physics_ceiling_mw'].values
     times = df_f['timestamp'].values
-    for i in range(1, len(p50)):
-        delta = p50[i] - p50[i-1]
-        if abs(delta) / cap > 0.15:
+
+    # Only check next 3 hourly transitions — operational horizon only
+    for i in range(1, min(4, len(p50))):
+        delta        = p50[i] - p50[i-1]
+        ceil_delta   = ceil[i] - ceil[i-1]
+        pct_change   = abs(delta) / cap
+
+        # Skip if both hours are below meaningful generation
+        if p50[i] < cap * 0.05 and p50[i-1] < cap * 0.05:
+            continue
+
+        # Skip if ramp is just following the physics ceiling (sunrise/sunset)
+        # If model ramp ≈ ceiling ramp it's physics-driven, not a forecast anomaly
+        if cap > 0 and abs(ceil_delta) / cap > 0.10 and \
+           abs(delta - ceil_delta) / cap < 0.10:
+            continue
+
+        if pct_change > 0.15:
             ramp_rows.append({
-                'plant_id': pid,
+                'plant_id':    pid,
                 'triggered_at': pd.Timestamp(times[i]).isoformat(),
-                'ramp_mw': round(float(abs(delta)), 1),
-                'direction': 'up' if delta > 0 else 'down',
-                'expires_at': (pd.Timestamp(times[i]) + pd.Timedelta(minutes=90)).isoformat()
+                'ramp_mw':     round(float(abs(delta)), 1),
+                'direction':   'up' if delta > 0 else 'down',
+                'expires_at':  (pd.Timestamp(times[i]) +
+                                pd.Timedelta(minutes=90)).isoformat()
             })
 
 # STEP 9 — UPSERT FORECASTS and RAMP ALERTS
