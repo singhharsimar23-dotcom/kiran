@@ -151,9 +151,9 @@ def seed_demo():
     # Upsert forecasts
     for i in range(0, len(forecast_rows), 100):
         chunk = forecast_rows[i:i+100]
-        supabase.table("forecasts").upsert(
-            chunk, 
-            on_conflict="plant_id,forecast_for,is_demo,demo_scenario"
+        supabase.table('forecasts').upsert(
+            chunk,
+            on_conflict='plant_id,forecast_for,is_demo,demo_scenario'
         ).execute()
 
     # Upsert ramp alerts

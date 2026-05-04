@@ -32,6 +32,7 @@ try:
     import pvlib
     import shap
     import shap.explainers._tree as shap_tree
+    import xgboost as xgb
     from xgboost import XGBRegressor
     from zoneinfo import ZoneInfo
     from bs4 import BeautifulSoup
@@ -87,8 +88,16 @@ else:
     try:
         _bg = pd.read_parquet('model/shap_background.parquet')
         _bg = _bg.apply(pd.to_numeric, errors='coerce').fillna(0)
-        shap_explainer = shap.Explainer(model_p50, _bg)
-        print("SHAP explainer built from background parquet")
+        
+        # Fix base_score string bug in XGBoost 2.0+ for SHAP
+        _booster = model_p50.get_booster()
+        _bs = _booster.attr('base_score')
+        if _bs and _bs.startswith('['):
+            _booster.set_attr(base_score=_bs.strip('[]'))
+            
+        # Use TreeExplainer specifically for XGBoost to avoid initialization issues
+        shap_explainer = shap.TreeExplainer(model_p50, data=_bg, feature_perturbation='interventional')
+        print("SHAP explainer built from background parquet using TreeExplainer")
     except Exception as _e:
         shap_explainer = None
         print(f"SHAP explainer unavailable: {_e}")
@@ -274,24 +283,49 @@ for pid, df_w in all_weather.items():
         df_w['p10_mw'] = np.minimum(df_w['p10_mw'], df_w['p50_mw'] - min_band)
         df_w['p90_mw'] = np.maximum(df_w['p90_mw'], df_w['p50_mw'] + min_band)
 
-    idx_peak = int(np.argmax(df_w['p50_mw'].values))
-    # SHAP — use background explainer to avoid XGBoost 2.0 base_score crash
-    shap_json = '{}'
-    if shap_explainer is not None:
-        try:
-            X_peak_clean = X.iloc[[idx_peak]].apply(pd.to_numeric, errors='coerce').fillna(0)
-            sv           = shap_explainer(X_peak_clean).values[0]  # shape (21,)
-            ceil_peak    = float(ceil[idx_peak])
-            shap_mw      = {
-                feat: round(float(v) * ceil_peak, 1)
-                for feat, v in zip(FEATURE_LIST, sv)
+    # SHAP — per slot, converted to MW at that slot's physics ceiling
+    try:
+        # Use XGBoost's native pred_contribs to avoid TreeExplainer initialization bugs
+        _dmat  = xgb.DMatrix(X)
+        sv_all = model_p50.get_booster().predict(_dmat, pred_contribs=True)[:, :-1]
+        
+        shap_col = []
+        for i, row_sv in enumerate(sv_all):
+            ceil_at_slot = float(ceil[i])
+            shap_mw = {
+                f: round(float(v) * ceil_at_slot, 1)
+                for f, v in zip(FEATURE_LIST, row_sv)
             }
-            top3     = dict(sorted(shap_mw.items(), key=lambda x: abs(x[1]), reverse=True)[:3])
-            shap_json = json.dumps(top3)
-        except Exception as _shap_err:
-            print(f"SHAP failed for {plant_map[pid]['name']}: {_shap_err}")
-            shap_json = '{}'
-    df_w['shap_drivers'] = shap_json  # stored on ALL rows for this plant
+            # Only keep drivers with > 0.1 MW impact to avoid clutter
+            top3 = dict(
+                sorted(
+                    [(f, v) for f, v in shap_mw.items() if abs(v) >= 0.1],
+                    key=lambda x: abs(x[1]),
+                    reverse=True
+                )[:3]
+            )
+            shap_col.append(json.dumps(top3))
+        df_w['shap_drivers'] = shap_col
+        print(f"  SHAP drivers computed for {p['name']}")
+    except Exception as e:
+        print(f"  SHAP failure for {p['name']}: {e}")
+        df_w['shap_drivers'] = '{}'
+
+    # WIND FLOOR — when cut-in speed is met, enforce minimum 10% of physics ceiling.
+    # Fixes: model suppresses plateau wind to 0 at IST night due to hour_sin/cos
+    # features learned from 6 solar plants. Zero is only correct when ceiling == 0
+    # (wind_speed < 3.5 m/s). When ceiling > 0, the turbines ARE spinning.
+    if p['asset_type'] == 'wind':
+        floor_mask  = ceil > 0.01 * p['capacity_mw']
+        min_output  = ceil * 0.10
+        p50_arr     = df_w['p50_mw'].values.copy()
+        p10_arr     = df_w['p10_mw'].values.copy()
+        p50_arr[floor_mask] = np.maximum(p50_arr[floor_mask], min_output[floor_mask])
+        p10_arr[floor_mask] = np.maximum(p10_arr[floor_mask], min_output[floor_mask])
+        p10_arr = np.minimum(p10_arr, p50_arr)   # re-enforce p10 <= p50
+        df_w['p10_mw'] = p10_arr
+        df_w['p50_mw'] = p50_arr
+        # p90 unchanged — already >= p50 from prior monotonicity enforcement
 
     # Risk and Reserve
     df_w['reserve_mw'] = np.ceil((df_w['p50_mw'] - df_w['p10_mw']) / 10) * 10
@@ -314,32 +348,42 @@ hist_means = {pid: float(np.mean(vals)) for pid, vals in hist_by_plant.items() i
 
 plant_name_to_id = {p['name']: p['id'] for p in plants}
 for pid, df_f in all_forecasts.items():
-    pname = plant_map[pid]['name']
+    p     = plant_map[pid]
+    pname = p['name']
     gon_fired = False
-    
+
+    # Correct GON direction: find SOURCE plants whose targets include THIS plant.
+    # gon_priors[source][target] means source LEADS target.
+    # We want to adjust pname only when pname IS a documented downstream target.
     for source_name, targets in gon_priors.items():
         if pname not in targets:
-            continue
-        
+            continue                          # this source does not lead pname
         edge = targets[pname]
         if edge['r'] < 0.6:
-            continue
-            
+            continue                          # correlation too weak to apply
+
         src_id = plant_name_to_id.get(source_name)
         if not src_id or src_id not in all_forecasts:
-            continue
-            
+            continue                          # source plant not in this fleet
+
         up_current = float(all_forecasts[src_id]['p50_mw'].mean())
-        up_hist = hist_means.get(src_id, up_current)
-        
-        if up_hist > 0:
-            deviation = (up_current - up_hist) / up_hist
-            if abs(deviation) > 0.15:
-                factor = 1 + 0.3 * deviation * edge['r']
-                df_f['p50_mw'] = df_f['p50_mw'] * np.clip(factor, 0.7, 1.3)
-                gon_fired = True
-                print(f"GON: {source_name}->{pname} factor={factor:.3f}")
-    
+        up_hist    = hist_means.get(src_id, up_current)
+
+        if up_hist <= 0:
+            continue                          # no baseline — cannot compute deviation
+
+        deviation = (up_current - up_hist) / up_hist
+        if abs(deviation) <= 0.15:
+            continue                          # source within normal range — no adjustment
+
+        factor = 1.0 + 0.3 * deviation * edge['r']
+        df_f['p50_mw'] = df_f['p50_mw'] * np.clip(factor, 0.7, 1.3)
+        # Re-enforce monotonicity after p50 adjustment
+        df_f['p10_mw'] = np.minimum(df_f['p10_mw'], df_f['p50_mw'])
+        df_f['p90_mw'] = np.maximum(df_f['p90_mw'], df_f['p50_mw'])
+        gon_fired = True
+        print(f"GON: {source_name}->{pname} | r={edge['r']} | factor={factor:.3f}")
+
     all_forecasts[pid]['gon_adjusted'] = gon_fired
 
 # STEP 7.5 — KPTCL LIVE CALIBRATION
@@ -400,15 +444,35 @@ try:
             if plant_map[pid]['asset_type'] == 'solar': f_solar_p50 += p50_val
             else: f_wind_p50 += p50_val
                 
-    if f_solar_p50 > 200:
-        expected_solar = f_solar_p50 / SOLAR_PENETRATION
-        cal_solar = float(np.clip(kptcl_data['solar_mw'] / max(expected_solar, 1.0), 0.60, 1.40))
-    else: cal_solar = 1.0
-        
-    if f_wind_p50 > 50:
-        expected_wind = f_wind_p50 / WIND_PENETRATION
-        cal_wind = float(np.clip(kptcl_data['wind_mw'] / max(expected_wind, 1.0), 0.60, 1.40))
-    else: cal_wind = 1.0
+    raw_solar = (kptcl_data['solar_mw'] / max(f_solar_p50 / SOLAR_PENETRATION, 1.0)) if f_solar_p50 > 200 else 1.0
+    raw_wind  = (kptcl_data['wind_mw'] / max(f_wind_p50 / WIND_PENETRATION, 1.0)) if f_wind_p50 > 50 else 1.0
+
+    # EMA smoothing — fetch previous successful calibration from DB
+    try:
+        prev_resp = supabase.table('kptcl_readings') \
+            .select('calibration_factor_solar,calibration_factor_wind') \
+            .eq('scrape_success', True) \
+            .order('scraped_at', desc=True).limit(1).execute()
+        if prev_resp.data:
+            prev_solar = float(prev_resp.data[0]['calibration_factor_solar'] or 1.0)
+            prev_wind  = float(prev_resp.data[0]['calibration_factor_wind']  or 1.0)
+        else:
+            prev_solar = 1.0
+            prev_wind  = 1.0
+    except Exception:
+        prev_solar = 1.0
+        prev_wind  = 1.0
+
+    # Sanity gate: raw ratio beyond ±40% means a bad KPTCL reading — hold previous
+    if abs(raw_solar - 1.0) > 0.40:
+        cal_solar = prev_solar
+    else:
+        cal_solar = float(np.clip(0.3 * raw_solar + 0.7 * prev_solar, 0.60, 1.40))
+
+    if abs(raw_wind - 1.0) > 0.40:
+        cal_wind = prev_wind
+    else:
+        cal_wind = float(np.clip(0.3 * raw_wind + 0.7 * prev_wind, 0.60, 1.40))
         
     kptcl_signal = {**kptcl_data, 'cal_solar': cal_solar, 'cal_wind': cal_wind}
     print(f"KPTCL solar={kptcl_data['solar_mw']} wind={kptcl_data['wind_mw']} pavagada={kptcl_data['pavagada_mw']} | cal_solar={cal_solar:.3f} cal_wind={cal_wind:.3f}")

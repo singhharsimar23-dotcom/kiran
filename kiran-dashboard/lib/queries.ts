@@ -76,7 +76,7 @@ export async function getLatestForecast(plantId: string): Promise<Forecast | nul
 export async function getLatestForecastsAll(
   isDemo: boolean,
   scenario?: string
-): Promise<Record<string, Forecast>> {
+): Promise<Forecast[]> {
   // Returns the peak p50 forecast for each plant in the next 24 hours
   const now = new Date().toISOString()
   const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
@@ -95,17 +95,10 @@ export async function getLatestForecastsAll(
   const { data, error } = await q
   if (error) {
     console.error('getLatestForecastsAll:', error)
-    return {}
+    return []
   }
 
-  // Group by plant_id and pick the one with max p50_mw
-  const latest: Record<string, Forecast> = {}
-  for (const f of data || []) {
-    if (!latest[f.plant_id] || (f.p50_mw || 0) > (latest[f.plant_id].p50_mw || 0)) {
-      latest[f.plant_id] = f
-    }
-  }
-  return latest
+  return data || []
 }
 
 export async function getClusterForecasts(
@@ -120,7 +113,10 @@ export async function getClusterForecasts(
   > = {}
 
   for (const p of plants) {
-    const f = forecasts[p.id]
+    const plantRows = forecasts.filter(f => f.plant_id === p.id)
+    // Use the peak p50 row for cluster summary contributions
+    const f = plantRows.reduce((best, row) => (row.p50_mw || 0) > (best?.p50_mw || 0) ? row : best, plantRows[0] as Forecast | undefined)
+
     const cn = p.cluster_name ?? 'Unknown'
     if (!byCluster[cn]) {
       byCluster[cn] = { p50s: [], uncertainties: [], count: 0 }
@@ -174,15 +170,15 @@ export async function getKptclStatus() {
   const { data } = await supabase
     .from('kptcl_readings')
     .select('scraped_at, solar_mw, wind_mw, pavagada_mw, '
-          + 'calibration_factor_solar, calibration_factor_wind, '
-          + 'applied, scrape_success')
+      + 'calibration_factor_solar, calibration_factor_wind, '
+      + 'applied, scrape_success')
     .order('scraped_at', { ascending: false })
     .limit(1)
   return data?.[0] ?? null
 }
 
 export async function getKptclHistory() {
-  const cutoff = new Date(Date.now() - 6*60*60*1000).toISOString()
+  const cutoff = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString()
   const { data } = await supabase
     .from('kptcl_readings')
     .select('scraped_at, solar_mw, wind_mw, calibration_factor_solar, applied, scrape_success')

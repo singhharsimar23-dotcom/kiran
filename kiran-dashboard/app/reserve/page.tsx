@@ -18,14 +18,14 @@ export default async function ReservePage({
     getActiveRampAlerts(),
   ])
 
-  // Find heroPlantId: plant_id with highest reserve_mw in latestForecasts
+  // Find heroPlantId: plant_id with highest reserve_mw across all forecast rows
   let heroPlantId = plants[0]?.id ?? ''
   let maxReserve = -1
 
-  Object.entries(forecasts).forEach(([plantId, forecast]) => {
-    if (forecast.reserve_mw !== null && forecast.reserve_mw > maxReserve) {
-      maxReserve = forecast.reserve_mw
-      heroPlantId = plantId
+  forecasts.forEach((f) => {
+    if (f.reserve_mw !== null && f.reserve_mw > maxReserve) {
+      maxReserve = f.reserve_mw
+      heroPlantId = f.plant_id
     }
   })
 

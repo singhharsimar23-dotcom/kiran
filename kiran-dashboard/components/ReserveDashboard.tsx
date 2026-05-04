@@ -32,7 +32,7 @@ import type { Plant, Forecast, RampAlert } from '@/lib/types'
 
 interface Props {
   plants: Plant[]
-  forecasts: Record<string, Forecast>
+  forecasts: Forecast[]
   heroPlantId: string
   rampAlerts: RampAlert[]
 }
@@ -40,12 +40,40 @@ interface Props {
 export default function ReserveDashboard({ plants, forecasts, heroPlantId, rampAlerts }: Props) {
   const [selectedPlantId, setSelectedPlantId] = useState<string>(heroPlantId)
 
-  const heroForecast = forecasts[selectedPlantId]
+  const heroForecast = useMemo(() => {
+    const plantRows = forecasts.filter(f => f.plant_id === selectedPlantId)
+    if (plantRows.length === 0) return null
+    return plantRows.reduce((best, f) => (f.reserve_mw ?? 0) > (best.reserve_mw ?? 0) ? f : best)
+  }, [forecasts, selectedPlantId])
+
+  // Use peak-hour row's SHAP drivers for display
+  // Peak hour has meaningful ceiling → non-zero SHAP values
+  const allHeroForecasts = useMemo(() =>
+    forecasts.filter(f => f.plant_id === selectedPlantId),
+    [forecasts, selectedPlantId])
+
+  const peakHeroForecast = useMemo(() =>
+    allHeroForecasts.length > 0
+      ? allHeroForecasts.reduce((best, f) => (f.p50_mw ?? 0) > (best.p50_mw ?? 0) ? f : best)
+      : heroForecast
+    , [allHeroForecasts, heroForecast])
+
+  const shapDrivers: Record<string, number> = useMemo(() => {
+    try {
+      const raw = peakHeroForecast?.shap_drivers
+      if (!raw || typeof raw !== 'object') return {}
+      const obj = raw as Record<string, number>
+      // Filter out zero values — only show drivers with meaningful impact
+      return Object.fromEntries(
+        Object.entries(obj).filter(([_, v]) => Math.abs(v) > 1)
+      )
+    } catch { return {} }
+  }, [peakHeroForecast])
   const heroPlant = plants.find((p) => p.id === selectedPlantId)
 
   const shapData = useMemo(() => {
-    if (!heroForecast?.shap_drivers) return []
-    return Object.entries(heroForecast.shap_drivers)
+    if (!shapDrivers) return []
+    return Object.entries(shapDrivers)
       .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
       .slice(0, 3)
       .map(([name, value]) => ({
@@ -53,19 +81,22 @@ export default function ReserveDashboard({ plants, forecasts, heroPlantId, rampA
         value: value,
         fill: value >= 0 ? '#16A34A' : '#DC2626',
       }))
-  }, [heroForecast])
+  }, [shapDrivers])
 
-  const topDriver = useMemo(() => {
-    if (!heroForecast?.shap_drivers) return null
-    const entries = Object.entries(heroForecast.shap_drivers).sort(
-      (a, b) => Math.abs(b[1]) - Math.abs(a[1])
-    )
-    const [name, value] = entries[0]
-    return {
-      label: FEATURE_LABELS[name] ?? name.replace(/_/g, ' '),
-      value: value,
-    }
-  }, [heroForecast])
+  const topDriverEntry = useMemo(() =>
+    Object.entries(shapDrivers)
+      .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))[0]
+    , [shapDrivers])
+
+  const narrative = useMemo(() => {
+    return topDriverEntry
+      ? `${heroPlant?.name} forecast: ${Math.round(heroForecast?.p50_mw ?? 0)} MW. ` +
+      `Primary driver: ${FEATURE_LABELS[topDriverEntry[0]] ?? topDriverEntry[0]} ` +
+      `(${topDriverEntry[1] > 0 ? '+' : ''}${Math.round(topDriverEntry[1])} MW impact). ` +
+      `Procure ${Math.round(heroForecast?.reserve_mw ?? 0)} MW reserve for reliability.`
+      : `${heroPlant?.name} forecast: ${Math.round(heroForecast?.p50_mw ?? 0)} MW. ` +
+      `Procure ${Math.round(heroForecast?.reserve_mw ?? 0)} MW reserve for reliability.`
+  }, [heroPlant, heroForecast, topDriverEntry])
 
   const renderRiskBadge = (level: string | null, isSmall = false) => {
     const base = isSmall ? 'text-[10px] px-2 py-0.5' : 'text-sm px-4 py-1.5'
@@ -124,7 +155,7 @@ export default function ReserveDashboard({ plants, forecasts, heroPlantId, rampA
                       {heroForecast?.reserve_mw?.toFixed(0) ?? '—'}
                       <span className="text-2xl ml-2 text-gray-400 font-normal">MW Reserve</span>
                     </h2>
-                    {renderRiskBadge(heroForecast?.risk_level)}
+                    {renderRiskBadge(heroForecast?.risk_level ?? null)}
                   </div>
                 </div>
 
@@ -132,69 +163,69 @@ export default function ReserveDashboard({ plants, forecasts, heroPlantId, rampA
                   <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">
                     Impact Drivers (SHAP)
                   </h3>
-                  <div className="h-[180px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart
-                        data={shapData}
-                        layout="vertical"
-                        margin={{ top: 5, right: 80, left: 20, bottom: 5 }}
-                      >
-                        <XAxis type="number" hide />
-                        <YAxis
-                          dataKey="name"
-                          type="category"
-                          width={140}
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: '#6B7280', fontSize: 12, fontWeight: 500 }}
-                        />
-                        <Tooltip
-                          cursor={{ fill: 'transparent' }}
-                          contentStyle={{
-                            borderRadius: '12px',
-                            border: 'none',
-                            boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
-                          }}
-                        />
-                        <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24}>
-                          {shapData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={entry.fill} />
-                          ))}
-                          <LabelList
-                            dataKey="value"
-                            position="right"
-                            content={(props: any) => {
-                              const { x, y, width, height, value } = props
-                              return (
-                                <text
-                                  x={x + width + 8}
-                                  y={y + height / 2}
-                                  fill={value >= 0 ? '#16A34A' : '#DC2626'}
-                                  textAnchor="start"
-                                  dominantBaseline="middle"
-                                  className="text-xs font-bold"
-                                >
-                                  {value >= 0 ? '+' : ''}
-                                  {value.toFixed(0)} MW
-                                </text>
-                              )
+                  <div style={{ height: '200px' }} className="w-full flex items-center justify-center">
+                    {shapData.length > 0 ? (
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={shapData}
+                          layout="vertical"
+                          margin={{ top: 5, right: 100, left: 20, bottom: 5 }}
+                        >
+                          <XAxis type="number" hide domain={['auto', 'auto']} />
+                          <YAxis
+                            dataKey="name"
+                            type="category"
+                            width={140}
+                            axisLine={false}
+                            tickLine={false}
+                            tick={{ fill: '#6B7280', fontSize: 12, fontWeight: 500 }}
+                          />
+                          <Tooltip
+                            cursor={{ fill: 'transparent' }}
+                            contentStyle={{
+                              borderRadius: '12px',
+                              border: 'none',
+                              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)',
                             }}
                           />
-                        </Bar>
-                      </BarChart>
-                    </ResponsiveContainer>
+                          <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24}>
+                            {shapData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={entry.fill} />
+                            ))}
+                            <LabelList
+                              dataKey="value"
+                              content={(props: any) => {
+                                const { x, y, width, height, value } = props
+                                const isPositive = value >= 0
+                                return (
+                                  <text
+                                    x={x + width + (isPositive ? 8 : -8)}
+                                    y={y + height / 2}
+                                    fill={isPositive ? '#16A34A' : '#DC2626'}
+                                    textAnchor={isPositive ? "start" : "end"}
+                                    dominantBaseline="middle"
+                                    className="text-xs font-bold"
+                                  >
+                                    {isPositive ? '+' : ''}
+                                    {Math.round(value)} MW
+                                  </text>
+                                )
+                              }}
+                            />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    ) : (
+                      <div className="text-gray-400 text-sm italic py-8">
+                        Impact drivers not currently available for this plant
+                      </div>
+                    )}
                   </div>
                 </div>
 
                 <div className="bg-gray-50 rounded-xl p-6 border border-gray-100">
                   <p className="text-gray-700 leading-relaxed text-lg">
-                    {heroPlant.name} forecast: <span className="font-bold">{heroForecast?.p50_mw?.toFixed(0) ?? '—'} MW</span>.
-                    {topDriver && (
-                      <>
-                        {' '}Primary driver: <span className="font-semibold text-gray-900">{topDriver.label}</span> ({topDriver.value > 0 ? '+' : ''}{topDriver.value.toFixed(0)} MW impact).
-                      </>
-                    )}
-                    {' '}Procure <span className="text-blue-600 font-bold">{heroForecast?.reserve_mw?.toFixed(0) ?? '—'} MW</span> reserve for reliability.
+                    {narrative}
                   </p>
                 </div>
               </div>
@@ -205,20 +236,24 @@ export default function ReserveDashboard({ plants, forecasts, heroPlantId, rampA
         {/* Right Section - Plant List (40%) */}
         <div className="lg:col-span-4 h-[calc(100vh-180px)] overflow-y-auto pr-2 space-y-3 custom-scrollbar">
           {plants.map((plant) => {
-            const forecast = forecasts[plant.id]
+            const plantForecasts = forecasts.filter(f => f.plant_id === plant.id)
+            const forecast = plantForecasts.reduce((best, f) =>
+              (f.reserve_mw ?? 0) > (best?.reserve_mw ?? 0) ? f : best,
+              plantForecasts[0]
+            )
             const isSelected = selectedPlantId === plant.id
             return (
               <button
                 key={plant.id}
                 onClick={() => setSelectedPlantId(plant.id)}
                 className={`w-full text-left p-4 rounded-xl border transition-all duration-200 ${isSelected
-                    ? 'bg-blue-50 border-blue-500 shadow-sm ring-1 ring-blue-500'
-                    : 'bg-white border-gray-100 hover:border-gray-300 shadow-sm'
+                  ? 'bg-blue-50 border-blue-500 shadow-sm ring-1 ring-blue-500'
+                  : 'bg-white border-gray-100 hover:border-gray-300 shadow-sm'
                   }`}
               >
                 <div className="flex justify-between items-start mb-2">
                   <span className="font-bold text-gray-900 truncate pr-2">{plant.name}</span>
-                  {renderRiskBadge(forecast?.risk_level, true)}
+                  {renderRiskBadge(forecast?.risk_level ?? null, true)}
                 </div>
                 <div className="flex gap-4">
                   <div className="flex flex-col">
