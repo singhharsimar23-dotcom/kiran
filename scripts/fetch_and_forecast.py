@@ -75,9 +75,13 @@ model_p90 = XGBRegressor(); model_p90.load_model('model/xgb_p90.json')
 import pickle as _pickle
 _shap_pkl = 'model/shap_explainer.pkl'
 if os.path.exists(_shap_pkl):
-    with open(_shap_pkl, 'rb') as _f:
-        shap_explainer = _pickle.load(_f)
-    print("SHAP explainer loaded from pkl")
+    try:
+        with open(_shap_pkl, 'rb') as _f:
+            shap_explainer = _pickle.load(_f)
+        print("SHAP explainer loaded from pkl")
+    except Exception as e:
+        print(f"Failed to load SHAP pickle (likely Python version mismatch): {e}")
+        shap_explainer = None
 else:
     # Fallback: build from background parquet if pkl missing
     try:
