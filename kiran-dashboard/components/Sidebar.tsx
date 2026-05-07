@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react'
 
 const NAV_LINKS = [
   { href: '/forecast', icon: '◈', label: 'Forecast' },
-  { href: '/reserve',  icon: '◎', label: 'Reserve', badge: '!' },
+  { href: '/reserve',  icon: '◎', label: 'Reserve' },
   { href: '/gon',      icon: '◉', label: 'GON' },
   { href: '/cluster',  icon: '▣', label: 'Cluster' },
   { href: '/verify',   icon: '◇', label: 'Verify' },
