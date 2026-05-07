@@ -156,6 +156,7 @@ export async function getModelHealth(): Promise<ModelHealth | null> {
   const { data, error } = await supabase
     .from('model_health')
     .select('*')
+    .not('mae_p50', 'is', null)
     .order('checked_at', { ascending: false })
     .limit(1)
 
