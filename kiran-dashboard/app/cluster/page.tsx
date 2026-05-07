@@ -4,7 +4,7 @@ export const revalidate = 900
 
 interface PageProps {
   searchParams: {
-    isDemo?: string
+    demo?: string
     scenario?: string
   }
 }
@@ -17,7 +17,7 @@ const CLUSTER_COLORS: Record<string, string> = {
 }
 
 export default async function ClusterPage({ searchParams }: PageProps) {
-  const isDemo = searchParams.isDemo === 'true'
+  const isDemo = searchParams.demo === 'true'
   const scenario = searchParams.scenario
   
   const clusters = await getClusterForecasts(isDemo, scenario)
@@ -29,46 +29,52 @@ export default async function ClusterPage({ searchParams }: PageProps) {
   const maxMW = Math.max(...clusters.map(c => c.total_p50), 1)
 
   return (
-    <div className="p-6 space-y-8 max-w-7xl mx-auto">
+    <div className="p-7 animate-fadein space-y-6">
       <div className="flex justify-between items-end">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-slate-900">Cluster Forecasts</h1>
-          <p className="text-slate-500 mt-1">Regional aggregation across Karnataka fleet</p>
+          <div className="flex items-center gap-3 mb-3 flex-wrap">
+            <span className="font-mono text-[8px] uppercase tracking-[2px] px-2 py-0.5 rounded-full border border-kamber/30 text-kamber">Criterion 06 — Architecture & Risk</span>
+          </div>
+          <p className="font-mono text-[9.5px] text-kts uppercase tracking-widest mb-1">Aggregated Output · 4 Zones · Flexible Regional Aggregation</p>
+          <h1 className="text-[26px] font-black text-ktp tracking-tight">Regional Clusters</h1>
+          <p className="font-mono text-[10.5px] text-kts mt-2 max-w-[560px] leading-relaxed">
+            Plant-level forecasts aggregated across <strong className="text-ktp">4 geographic zones</strong>. Uncertainty bands propagate through aggregation using quadrature (σ² sum). Flexible — add or remove plants without retraining.
+          </p>
         </div>
         {isDemo && scenario && (
-          <div className="px-3 py-1 bg-amber-100 text-amber-800 text-sm font-medium rounded-full">
+          <div className="px-3 py-1 bg-kamber/10 border border-kamber/20 text-kamber font-mono text-[10px] rounded-full">
             Demo Scenario: {scenario}
           </div>
         )}
       </div>
 
       {/* 2x2 Grid of Cluster Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {clusters.map((cluster) => (
-          <div 
+          <div
             key={cluster.cluster_name}
-            className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm hover:shadow-md transition-shadow"
+            className="relative p-5 bg-ks1 rounded-[10px] border border-kborder overflow-hidden hover:border-kcyan/20 transition-colors"
           >
-            <div className="flex items-start justify-between">
-              <h2 className="text-lg font-semibold text-slate-700">{cluster.cluster_name}</h2>
-              <span className="text-sm text-slate-400 font-medium">{cluster.plant_count} plants</span>
+            <div className="absolute top-0 left-0 right-0 h-[3px]" style={{ background: CLUSTER_COLORS[cluster.cluster_name] || '#64748b' }} />
+            <div className="flex items-start justify-between mt-1">
+              <h2 className="text-[13px] font-bold" style={{ color: CLUSTER_COLORS[cluster.cluster_name] || '#6B9EC4' }}>{cluster.cluster_name}</h2>
+              <span className="font-mono text-[9px] text-ktm">{cluster.plant_count} plants</span>
             </div>
-            <div className="mt-4">
-              <div className="text-4xl font-bold text-slate-900">
-                {cluster.total_p50.toFixed(0)} <span className="text-xl font-medium text-slate-500">MW</span>
+            <div className="mt-3">
+              <div className="font-mono text-[32px] font-semibold text-ktp tracking-tight leading-none">
+                {cluster.total_p50.toFixed(0)}
+                <span className="text-[16px] font-normal text-kts ml-1">MW</span>
               </div>
-              <p className="mt-1 text-sm text-slate-500 font-medium">
+              <p className="mt-1 font-mono text-[9.5px] text-ktm">
                 ± {cluster.uncertainty.toFixed(0)} MW uncertainty
               </p>
             </div>
-            <div 
-              className="mt-4 h-1.5 w-full rounded-full bg-slate-100 overflow-hidden"
-            >
-              <div 
+            <div className="mt-3 h-1 w-full rounded-full bg-kborder overflow-hidden">
+              <div
                 className="h-full rounded-full transition-all duration-500"
-                style={{ 
+                style={{
                   width: `${(cluster.total_p50 / maxMW) * 100}%`,
-                  backgroundColor: CLUSTER_COLORS[cluster.cluster_name] || '#64748b'
+                  background: CLUSTER_COLORS[cluster.cluster_name] || '#64748b'
                 }}
               />
             </div>
@@ -77,21 +83,24 @@ export default async function ClusterPage({ searchParams }: PageProps) {
       </div>
 
       {/* Contribution Chart */}
-      <div className="p-6 bg-white rounded-xl border border-slate-200 shadow-sm">
-        <h3 className="text-lg font-semibold text-slate-900 mb-6">Cluster Contribution</h3>
-        <div className="space-y-5">
+      <div className="p-[18px] bg-ks1 rounded-[10px] border border-kborder">
+        <div className="flex justify-between items-center mb-5">
+          <h3 className="font-mono text-[9px] uppercase tracking-widest text-kts">Cluster Contribution</h3>
+          <span className="font-mono text-[10px] text-ktm">{totalMW.toFixed(0)} MW total</span>
+        </div>
+        <div className="space-y-4">
           {sortedClusters.map((cluster) => (
-            <div key={cluster.cluster_name} className="space-y-1.5">
-              <div className="flex justify-between text-sm font-medium">
-                <span className="text-slate-700">{cluster.cluster_name}</span>
-                <span className="text-slate-900">{cluster.total_p50.toFixed(0)} MW</span>
+            <div key={cluster.cluster_name}>
+              <div className="flex justify-between text-[11.5px] font-semibold mb-1.5">
+                <span style={{ color: CLUSTER_COLORS[cluster.cluster_name] || '#6B9EC4' }}>{cluster.cluster_name}</span>
+                <span className="font-mono text-kts">{cluster.total_p50.toFixed(0)} MW</span>
               </div>
-              <div className="relative h-8 w-full bg-slate-50 rounded-md overflow-hidden">
-                <div 
+              <div className="relative h-[22px] w-full bg-kborder rounded overflow-hidden">
+                <div
                   className="absolute inset-y-0 left-0 transition-all duration-700 ease-out"
-                  style={{ 
+                  style={{
                     width: `${(cluster.total_p50 / maxMW) * 100}%`,
-                    backgroundColor: CLUSTER_COLORS[cluster.cluster_name] || '#64748b'
+                    background: `linear-gradient(90deg, ${CLUSTER_COLORS[cluster.cluster_name] || '#64748b'}, ${CLUSTER_COLORS[cluster.cluster_name] || '#64748b'}aa)`
                   }}
                 />
               </div>
@@ -101,17 +110,16 @@ export default async function ClusterPage({ searchParams }: PageProps) {
       </div>
 
       {/* Total Row */}
-      <div className="p-8 bg-slate-900 rounded-2xl shadow-xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="p-6 bg-kcyan/[0.04] border border-kcyan/20 rounded-[10px] flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-slate-400 text-sm font-bold uppercase tracking-wider">Aggregate Capacity</h2>
-          <div className="text-3xl font-bold text-white mt-1">
-            Total Karnataka Forecast: {totalMW.toFixed(0)} MW
+          <p className="font-mono text-[9px] text-kcyan uppercase tracking-[2px] mb-1">Aggregate Karnataka Forecast</p>
+          <div className="font-mono text-[28px] font-semibold text-ktp tracking-tight">
+            {totalMW.toFixed(0)} <span className="text-kcyan text-[18px]">MW</span>
           </div>
         </div>
-        <div className="h-px md:h-12 w-full md:w-px bg-slate-700" />
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
-          <span className="text-slate-300 font-medium">System status: Normal</span>
+          <div className="w-2 h-2 rounded-full bg-kgreen animate-blink" />
+          <span className="font-mono text-[11px] text-kgreen">All systems nominal</span>
         </div>
       </div>
     </div>

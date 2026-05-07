@@ -30,19 +30,29 @@ export default async function ReservePage({
   })
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-7xl mx-auto">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">Reserve Management</h1>
-          <KptclSignalBadge />
+    <div className="p-7 animate-fadein">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 mb-6">
+        <div>
+          <div className="flex items-center gap-3 mb-3 flex-wrap">
+            <span className="font-mono text-[8px] uppercase tracking-[2px] px-2 py-0.5 rounded-full border border-kgreen/30 text-kgreen">Criterion 03 — Uncertainty &amp; Explainability</span>
+            <span className="font-mono text-[8px] uppercase tracking-[2px] px-2 py-0.5 rounded-full border border-kcyan/30 text-kcyan">Criterion 05 — Edge Cases</span>
+          </div>
+          <p className="font-mono text-[9.5px] text-kts uppercase tracking-widest mb-1">
+            Operational Output · MW Requirement · Timing · Ramp Alerts
+          </p>
+          <h1 className="text-[26px] font-black text-ktp tracking-tight">Reserve Procurement</h1>
+          <p className="font-mono text-[10.5px] text-kts mt-2 max-w-[560px] leading-relaxed">
+            Uncertainty band (P90−P10) converted to <strong className="text-ktp">actionable MW reserve</strong> with exact timing. SHAP drivers explain <em>why</em> each reserve is needed. KPTCL live reading calibrates the forecast in real-time.
+          </p>
         </div>
-        <ReserveDashboard
-          plants={plants}
-          forecasts={forecasts}
-          heroPlantId={heroPlantId}
-          rampAlerts={rampAlerts}
-        />
+        <KptclSignalBadge />
       </div>
+      <ReserveDashboard
+        plants={plants}
+        forecasts={forecasts}
+        heroPlantId={heroPlantId}
+        rampAlerts={rampAlerts}
+      />
     </div>
   )
 }

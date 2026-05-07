@@ -1,42 +1,24 @@
-import type { Metadata } from "next";
-import localFont from "next/font/local";
-import { Suspense } from "react";
-import Navbar from "@/components/Navbar";
-import "./globals.css";
-
-const geistSans = localFont({
-  src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
-  weight: "100 900",
-});
-const geistMono = localFont({
-  src: "./fonts/GeistMonoVF.woff",
-  variable: "--font-geist-mono",
-  weight: "100 900",
-});
+import type { Metadata } from 'next'
+import { Suspense } from 'react'
+import Sidebar from '@/components/Sidebar'
+import './globals.css'
 
 export const metadata: Metadata = {
-  title: "KIRAN | Energy Forecasting",
-  description: "Grid Observation Network for Renewable Energy",
-};
+  title: 'KIRAN — Karnataka Intelligent Renewable Analytics',
+  description: 'AI-Based Renewable Generation Forecasting · KREDL / KSPDCL',
+}
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-gray-50`}
-      >
-        <Suspense fallback={null}>
-          <Navbar />
+      <body className="flex min-h-screen bg-kbg text-ktp font-syne antialiased">
+        <Suspense fallback={<div className="w-[230px] flex-shrink-0 bg-ks1 border-r border-kborder" />}>
+          <Sidebar />
         </Suspense>
-        <main>
+        <main className="flex-1 min-h-screen" style={{ marginLeft: 'var(--sidebar)' }}>
           {children}
         </main>
       </body>
     </html>
-  );
+  )
 }

@@ -111,13 +111,13 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
   }
 
   return (
-    <div className="p-6 space-y-6 flex flex-col h-full bg-white rounded-xl shadow-sm border border-gray-100">
+    <div className="p-6 space-y-6 flex flex-col h-full bg-ks1 rounded-[10px] border border-kborder">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-semibold text-gray-800">Generation Forecast</h2>
+        <h2 className="text-xl font-semibold text-ktp">Generation Forecast</h2>
         <select
           value={selectedPlantId}
           onChange={handlePlantChange}
-          className="p-2 border rounded-md bg-gray-50 text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="p-2 border border-kborder rounded-md bg-ks2 text-ktp font-mono text-[12px] focus:outline-none focus:ring-1 focus:ring-kcyan cursor-pointer hover:border-kcyan/30 transition-colors"
         >
           {plants.map((p) => (
             <option key={p.id} value={p.id}>
@@ -155,9 +155,9 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
             />
             <Tooltip
               content={<CustomTooltip />}
-              labelFormatter={(label: string) => {
+              labelFormatter={(label) => {
                 try {
-                  return new Date(label).toLocaleString('en-IN', {
+                  return new Date(String(label)).toLocaleString('en-IN', {
                     timeZone: 'Asia/Kolkata',
                     weekday: 'short',
                     hour: '2-digit',
@@ -206,17 +206,17 @@ export default function ForecastChart({ plants, forecasts: initialForecasts, sel
 
       {stats && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="p-4 bg-blue-50 rounded-lg border border-blue-100">
-            <p className="text-sm text-blue-600 font-medium">Peak P50</p>
-            <p className="text-2xl font-bold text-blue-900">{stats.peakP50.toFixed(0)} MW</p>
+          <div className="p-4 bg-kcyan/[0.06] rounded-lg border border-kcyan/20">
+            <p className="text-sm text-kcyan font-mono font-medium">Peak P50</p>
+            <p className="text-2xl font-bold text-ktp font-mono">{stats.peakP50.toFixed(0)} MW</p>
           </div>
-          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-            <p className="text-sm text-gray-600 font-medium">Peak Reserve</p>
-            <p className="text-2xl font-bold text-gray-900">{stats.peakReserve.toFixed(0)} MW</p>
+          <div className="p-4 bg-ks2 rounded-lg border border-kborder">
+            <p className="text-sm text-kts font-mono font-medium">Peak Reserve</p>
+            <p className="text-2xl font-bold text-kamber font-mono">{stats.peakReserve.toFixed(0)} MW</p>
           </div>
-          <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 flex flex-col justify-between">
-            <p className="text-sm text-gray-600 font-medium">Grid Risk</p>
-            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${riskBadgeClass(stats.riskLevel)} w-fit mt-2`}>
+          <div className="p-4 bg-ks2 rounded-lg border border-kborder flex flex-col justify-between">
+            <p className="text-sm text-kts font-mono font-medium">Grid Risk</p>
+            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-mono font-medium border ${riskBadgeClass(stats.riskLevel)} w-fit mt-2`}>
               {stats.riskLevel}
             </span>
           </div>
