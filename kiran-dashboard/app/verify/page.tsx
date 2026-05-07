@@ -1,14 +1,12 @@
-import { getModelHealth, getKptclHistory, getBacktestData } from '@/lib/queries'
+import { getModelHealth, getKptclHistory } from '@/lib/queries'
 import KptclCalibrationChart from '@/components/KptclCalibrationChart'
-import BacktestChart from '@/components/BacktestChart'
 
 export const dynamic = 'force-dynamic'
 
 export default async function VerifyPage() {
-  const [health, kptclHistory, backtestData] = await Promise.all([
+  const [health, kptclHistory] = await Promise.all([
     getModelHealth(),
     getKptclHistory(),
-    getBacktestData(),
   ])
 
   if (!health) {
@@ -137,10 +135,6 @@ export default async function VerifyPage() {
             </table>
           </div>
         </div>
-      )}
-
-      {backtestData.length > 0 && (
-        <BacktestChart data={backtestData} />
       )}
     </div>
   )
