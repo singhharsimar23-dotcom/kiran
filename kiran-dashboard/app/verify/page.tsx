@@ -2,7 +2,7 @@ import { getModelHealth, getKptclHistory, getBacktestData } from '@/lib/queries'
 import KptclCalibrationChart from '@/components/KptclCalibrationChart'
 import BacktestChart from '@/components/BacktestChart'
 
-export const revalidate = 3600
+export const dynamic = 'force-dynamic'
 
 export default async function VerifyPage() {
   const [health, kptclHistory, backtestData] = await Promise.all([
@@ -31,7 +31,11 @@ export default async function VerifyPage() {
 
   const perPlantMetrics = health.per_plant_metrics 
     ? Object.entries(health.per_plant_metrics)
-        .map(([name, m]) => ({ name, ...m }))
+        .map(([name, m]: [string, any]) => ({ 
+          name, 
+          mae:   typeof m?.mae   === 'number' ? m.mae   : 0,
+          skill: typeof m?.skill === 'number' ? m.skill : 0,
+        }))
         .sort((a, b) => b.skill - a.skill)
     : []
 
